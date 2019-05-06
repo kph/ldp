@@ -7,6 +7,7 @@ package ldp
 
 import (
 	"errors"
+	"math/rand"
 )
 
 const (
@@ -41,5 +42,35 @@ var PatternMap = map[string]PatternEntry{
 	Alpha:  {SequenceToPattern, CheckPattern, []byte(AlphaTest)},
 }
 
-//Pattern: Random
+//Pattern: Random to do
 //This is random data. This is the only pattern that the receiver can not check.
+
+// (pm *PatternEntry)NewMessage returns a protocol message using the
+// specified PatternEntry and length
+func (pat *PatternEntry) NewMessage(pn string, l int) []byte {
+	return PatternToMsg(pn, pat.Sourcer(pat.SequenceData, l))
+}
+
+// NewMessage returns a protocol message from the named pattern of the
+// specified length
+func NewMessage(pn string, l int) (p []byte, err error) {
+	pat, patFound := PatternMap[pn]
+	if !patFound {
+		return nil, ErrPatternUnknown
+	}
+	return pat.NewMessage(pn, l), nil
+}
+
+// NewRandomMessage returns a protocol message of a random length of
+// a random type.
+func NewRandomMessage() []byte {
+	mtype := rand.Int31n(int32(len(PatternMap) + 1))
+	mlen := int(rand.Int31n(0xffff))
+	for k, pat := range PatternMap {
+		if mtype == 0 {
+			return pat.NewMessage(k, mlen)
+		}
+		mtype--
+	}
+	panic("weird randomness")
+}

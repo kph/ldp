@@ -45,8 +45,9 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 	for {
 		// Scan the input looking for the start of the header in the
 		// input stream
-		for len(s.b) >= 2+len(Pattern) && s.b[0] != '\n' && s.b[1] != '\n' &&
-			string(s.b[2:2+len(Pattern)]) != Pattern {
+		for len(s.b) >= 2+len(Pattern) && (s.b[0] != '\n' ||
+			s.b[1] != '\n' ||
+			string(s.b[2:2+len(Pattern)]) != Pattern) {
 			if s.sync {
 				s.sync = false // We are re-syncing
 				s.FramingErr++ // Count this as a framing error
@@ -125,10 +126,14 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 func CheckPattern(s []byte, p []byte) (err error) {
 	residual := s
 	for len(residual) > 0 {
-		if !reflect.DeepEqual(p, residual[:len(p)]) {
+		m := len(residual)
+		if m > len(p) {
+			m = len(p)
+		}
+		if !reflect.DeepEqual(p[:m], residual[:m]) {
 			return ErrPatternMismatch
 		}
-		residual = residual[len(p):]
+		residual = residual[m:]
 	}
 	return nil
 }

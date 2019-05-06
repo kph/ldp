@@ -7,17 +7,21 @@ package ldp
 import (
 	"crypto/sha256"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
+// Sink holds the context for received data. It contains state information,
+// residual data, and counters.
 type Sink struct {
-	Sync        bool   // Do we expect that we are synchronized
 	GoodFrames  int64  // Count of good frames received
 	FramingErr  int64  // Count of framing errors
 	ProtocolErr int64  // Count of protocol errors
 	ChecksumErr int64  // Count of checksum errors
+	PatternErr  int64  // Count of pattern errors
+	sync        bool   // Do we expect that we are synchronized
 	b           []byte // Unprocessed input bytes
 }
 
@@ -30,7 +34,7 @@ var patternRegex, sha256Regex, lengthRegex *regexp.Regexp
 // tests, set preSync to true. This ensures we count spurious bytes
 // correctly.
 func NewSink(preSync bool) (s *Sink) {
-	return &Sink{Sync: preSync}
+	return &Sink{sync: preSync}
 }
 
 // Write() - write into the sink. Write bytes received into the
@@ -43,8 +47,8 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 		// input stream
 		for len(s.b) >= 2+len(Pattern) && s.b[0] != '\n' && s.b[1] != '\n' &&
 			string(s.b[2:2+len(Pattern)]) != Pattern {
-			if !s.Sync {
-				s.Sync = true  // We are re-syncing
+			if s.sync {
+				s.sync = false // We are re-syncing
 				s.FramingErr++ // Count this as a framing error
 			}
 			s.b = s.b[1:]
@@ -53,6 +57,7 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 		if len(s.b) <= 2+len(Pattern) {
 			break
 		}
+
 		// Split into header and data
 		sp := strings.SplitAfterN(string(s.b[2:]), "\n\n", 2)
 		if len(sp) < 2 {
@@ -63,14 +68,14 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 			break
 		}
 
-		fmt.Printf("Parsed header\n%s", sp[0])
-		//patternStr := patternRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
+		// TODO: Do this with one regex
+		patternStr := patternRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
 		lengthStr := lengthRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
 		sha256Str := sha256Regex.FindAllStringSubmatch(sp[0], 2)[0][2]
 
 		dataLen, err := strconv.Atoi(lengthStr)
 		if err != nil {
-			s.Sync = true       // Protocol error - resync
+			s.sync = false      // Protocol error - resync
 			s.ProtocolErr++     // Count as a protocol error
 			s.b = []byte(sp[1]) // Scan after the header
 			continue            // Continue parsing
@@ -81,19 +86,51 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 			break
 		}
 
-		// Complete data, save the residual for next time
+		// Complete data, we are synced, save residual for next time
+		s.sync = true
 		s.b = []byte(sp[1][dataLen:])
 
-		sha256Calc := fmt.Sprintf("%x", sha256.Sum256([]byte(sp[1][:dataLen])))
-		if sha256Calc != sha256Str {
+		// Check the data sequence
+		patData := []byte(sp[1][:dataLen])
+		sha256Calc := fmt.Sprintf("%x", sha256.Sum256(patData))
+		shaGood := sha256Calc == sha256Str
+		pat, patFound := PatternMap[patternStr]
+		patErr := error(nil)
+		if patFound {
+			patErr = pat.Sinker(pat.SequenceData, patData)
+		} else {
+			patErr = ErrPatternUnknown
+		}
+		if shaGood && patErr == nil {
+			s.GoodFrames++
+			continue
+		}
+		if !shaGood {
 			fmt.Printf("Expected SHA256 %s got %s\n",
 				sha256Str, sha256Calc)
 			s.ChecksumErr++
-			continue
 		}
-		s.GoodFrames++
+		if patErr != nil {
+			fmt.Printf("Pattern %s error: %s\n", patternStr, patErr)
+			s.PatternErr++
+		}
 	}
 	return len(p), nil
+}
+
+// CheckPattern checks that the pattern received matches the expected
+// data sequence. A pattern is defined as a potentially truncated,
+// potentially repeated sequence.
+// truncated
+func CheckPattern(s []byte, p []byte) (err error) {
+	residual := s
+	for len(residual) > 0 {
+		if !reflect.DeepEqual(p, residual[:len(p)]) {
+			return ErrPatternMismatch
+		}
+		residual = residual[len(p):]
+	}
+	return nil
 }
 
 func init() {

@@ -5,15 +5,20 @@
 package ldp
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 type Sink struct {
-	sync     bool // Do we expect that we are synchronized
-	Spurious byte // Spurious - unexpected bytes
-	b        []byte
+	Sync        bool   // Do we expect that we are synchronized
+	GoodFrames  int64  // Count of good frames received
+	FramingErr  int64  // Count of framing errors
+	ProtocolErr int64  // Count of protocol errors
+	ChecksumErr int64  // Count of checksum errors
+	b           []byte // Unprocessed input bytes
 }
 
 var patternRegex, sha256Regex, lengthRegex *regexp.Regexp
@@ -25,36 +30,69 @@ var patternRegex, sha256Regex, lengthRegex *regexp.Regexp
 // tests, set preSync to true. This ensures we count spurious bytes
 // correctly.
 func NewSink(preSync bool) (s *Sink) {
-	return &Sink{sync: preSync}
+	return &Sink{Sync: preSync}
 }
 
 // Write() - write into the sink. Write bytes received into the
 // sink, frame and parse.
 func (s *Sink) Write(p []byte) (n int, err error) {
 	s.b = append(s.b, p...)
-	// Scan the input looking for the start of the header in the
-	// input stream
-	for len(s.b) >= 2+len(Pattern) && s.b[0] != '\n' && s.b[1] != '\n' &&
-		string(s.b[2:2+len(Pattern)]) != Pattern {
-		if !s.sync {
-			s.Spurious++
-		}
-		s.b = s.b[1:]
-	}
-	// Get out if we don't have enough data to parse
-	if len(s.b) <= 2+len(Pattern) {
-		return len(p), nil
-	}
-	// Split into header and data
-	sp := strings.SplitAfterN(string(s.b[2:]), "\n\n", 2)
-	if len(sp) < 2 {
-		return
-	}
-	fmt.Printf("Parsed header\n%s", sp[0])
-	fmt.Printf("%s %s\n", Pattern, patternRegex.FindAllStringSubmatch(sp[0], 2)[0][2])
-	fmt.Printf("%s %s\n", Length, lengthRegex.FindAllStringSubmatch(sp[0], 2)[0][2])
-	fmt.Printf("%s %s\n", SHA256, sha256Regex.FindAllStringSubmatch(sp[0], 2)[0][2])
 
+	for {
+		// Scan the input looking for the start of the header in the
+		// input stream
+		for len(s.b) >= 2+len(Pattern) && s.b[0] != '\n' && s.b[1] != '\n' &&
+			string(s.b[2:2+len(Pattern)]) != Pattern {
+			if !s.Sync {
+				s.Sync = true  // We are re-syncing
+				s.FramingErr++ // Count this as a framing error
+			}
+			s.b = s.b[1:]
+		}
+		// Get out if we don't have enough data to parse
+		if len(s.b) <= 2+len(Pattern) {
+			break
+		}
+		// Split into header and data
+		sp := strings.SplitAfterN(string(s.b[2:]), "\n\n", 2)
+		if len(sp) < 2 {
+			// TODO: possibly bail on an impossibly long header.
+			// i.e. we are this far because we have seen the
+			// introduction of the header, but not an end. Should
+			// eventually resync. Think about a test for this case.
+			break
+		}
+
+		fmt.Printf("Parsed header\n%s", sp[0])
+		//patternStr := patternRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
+		lengthStr := lengthRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
+		sha256Str := sha256Regex.FindAllStringSubmatch(sp[0], 2)[0][2]
+
+		dataLen, err := strconv.Atoi(lengthStr)
+		if err != nil {
+			s.Sync = true       // Protocol error - resync
+			s.ProtocolErr++     // Count as a protocol error
+			s.b = []byte(sp[1]) // Scan after the header
+			continue            // Continue parsing
+		}
+
+		// We have a complete header. Do we have complete data?
+		if len(sp[1]) < dataLen {
+			break
+		}
+
+		// Complete data, save the residual for next time
+		s.b = []byte(sp[1][dataLen:])
+
+		sha256Calc := fmt.Sprintf("%x", sha256.Sum256([]byte(sp[1][:dataLen])))
+		if sha256Calc != sha256Str {
+			fmt.Printf("Expected SHA256 %s got %s\n",
+				sha256Str, sha256Calc)
+			s.ChecksumErr++
+			continue
+		}
+		s.GoodFrames++
+	}
 	return len(p), nil
 }
 

@@ -61,7 +61,7 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 
 		// Split into header and data
 		sp := strings.SplitAfterN(string(s.b[2:]), "\n\n", 2)
-		if len(sp) < 2 {
+		if len(sp) < 1 || !strings.HasSuffix(sp[0], "\n\n") {
 			// TODO: possibly bail on an impossibly long header.
 			// i.e. we are this far because we have seen the
 			// introduction of the header, but not an end. Should
@@ -83,16 +83,21 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 		}
 
 		// We have a complete header. Do we have complete data?
-		if len(sp[1]) < dataLen {
-			break
+		patData := []byte{}
+		if dataLen > 0 {
+			if len(sp) < 2 || len(sp[1]) < dataLen {
+				break
+			}
+			s.b = []byte(sp[1][dataLen:])
+			patData = []byte(sp[1][:dataLen])
+		} else {
+			s.b = s.b[len(sp[0])+2:]
 		}
 
-		// Complete data, we are synced, save residual for next time
+		// Complete data, we are synced
 		s.sync = true
-		s.b = []byte(sp[1][dataLen:])
 
 		// Check the data sequence
-		patData := []byte(sp[1][:dataLen])
 		sha256Calc := fmt.Sprintf("%x", sha256.Sum256(patData))
 		shaGood := sha256Calc == sha256Str
 		pat, patFound := PatternMap[patternStr]
@@ -124,13 +129,15 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 // potentially repeated sequence.
 // truncated
 func CheckPattern(s []byte, p []byte) (err error) {
-	residual := s
+	residual := p
 	for len(residual) > 0 {
 		m := len(residual)
-		if m > len(p) {
-			m = len(p)
+		if m > len(s) {
+			m = len(s)
 		}
-		if !reflect.DeepEqual(p[:m], residual[:m]) {
+		if !reflect.DeepEqual(s[:m], residual[:m]) {
+			fmt.Printf("mismatch: m:%d s:%v r:%v\n",
+				m, s[:m], residual[:m])
 			return ErrPatternMismatch
 		}
 		residual = residual[m:]

@@ -5,6 +5,7 @@
 package ldp
 
 import (
+	"math/rand"
 	"reflect"
 	"testing"
 )
@@ -49,16 +50,42 @@ func (s *Sink) testIsExpectedResidual(t *testing.T,
 	}
 }
 
-func TestLDP(t *testing.T) {
+func TestLDPRandom(t *testing.T) {
 	s := NewSink(true)
-	m := NewRandomMessage()
-	n, err := s.Write(m)
-	if n != len(m) {
-		t.Errorf("Expected written length %d got %d",
-			n, len(m))
+	for i := int64(0); i < 10000; i++ {
+		m := NewRandomMessage()
+		n, err := s.Write(m)
+		if n != len(m) {
+			t.Errorf("Expected written length %d got %d",
+				n, len(m))
+		}
+		if err != nil {
+			t.Errorf("Unexpcted error %s", err)
+		}
+		s.testIsExpectedResidual(t, true, i+1, 0, 0, 0, 0, []byte{})
 	}
-	if err != nil {
-		t.Errorf("Unexpcted error %s", err)
+}
+
+func TestLDPAll(t *testing.T) {
+	s := NewSink(true)
+	expectedGood := int64(1)
+	for i := int64(0); i < 10000; i++ {
+		for k, pat := range PatternMap {
+			r1 := rand.Int31n(int32(10))
+			r2 := rand.Int31n(int32(len(pat.SequenceData)))
+			ml := int(r1*int32(len(pat.SequenceData)) + r2)
+			m := pat.NewMessage(k, ml)
+			n, err := s.Write(m)
+			if n != len(m) {
+				t.Errorf("Expected written length %d got %d",
+					n, len(m))
+			}
+			if err != nil {
+				t.Errorf("Unexpcted error %s", err)
+			}
+			s.testIsExpectedResidual(t, true, expectedGood,
+				0, 0, 0, 0, []byte{})
+			expectedGood++
+		}
 	}
-	s.testIsExpectedResidual(t, true, 1, 0, 0, 0, 0, []byte{})
 }

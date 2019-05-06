@@ -26,6 +26,9 @@ func PatternToMsg(n string, p []byte) (m []byte) {
 // the pattern length, the output pattern won't be truncated. If its
 // not a multiple, then the bytes that fit will be repeated.
 func SequenceToPattern(s []byte, l int) (p []byte) {
+	if l == 0 {
+		return []byte{}
+	}
 	p = s
 	for len(p) < l {
 		p = append(p, p...) // Double sequence geometrically

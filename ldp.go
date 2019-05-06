@@ -64,7 +64,7 @@ func NewMessage(pn string, l int) (p []byte, err error) {
 // NewRandomMessage returns a protocol message of a random length of
 // a random type.
 func NewRandomMessage() []byte {
-	mtype := rand.Int31n(int32(len(PatternMap) + 1))
+	mtype := rand.Int31n(int32(len(PatternMap)))
 	mlen := int(rand.Int31n(0xffff))
 	for k, pat := range PatternMap {
 		if mtype == 0 {

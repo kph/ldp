@@ -6,6 +6,7 @@ package ldp
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -70,11 +71,27 @@ func (s *Sink) Write(p []byte) (n int, err error) {
 		}
 
 		// TODO: Do this with one regex
-		patternStr := patternRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
-		lengthStr := lengthRegex.FindAllStringSubmatch(sp[0], 2)[0][2]
-		sha256Str := sha256Regex.FindAllStringSubmatch(sp[0], 2)[0][2]
+		patternMatch := patternRegex.FindAllStringSubmatch(sp[0], 2)
+		lengthMatch := lengthRegex.FindAllStringSubmatch(sp[0], 2)
+		sha256Match := sha256Regex.FindAllStringSubmatch(sp[0], 2)
 
-		dataLen, err := strconv.Atoi(lengthStr)
+		dataLen := 0
+		patternStr := ""
+		lengthStr := ""
+		sha256Str := ""
+
+		if len(patternMatch) > 0 && len(patternMatch[0]) > 2 &&
+			len(lengthMatch) > 0 && len(patternMatch[0]) > 2 &&
+			len(sha256Match) > 0 && len(sha256Match[0]) > 2 {
+			patternStr = patternMatch[0][2]
+			lengthStr = lengthMatch[0][2]
+			sha256Str = sha256Match[0][2]
+
+			dataLen, err = strconv.Atoi(lengthStr)
+		} else {
+			err = errors.New("Protocol error")
+		}
+
 		if err != nil {
 			s.sync = false      // Protocol error - resync
 			s.ProtocolErr++     // Count as a protocol error
